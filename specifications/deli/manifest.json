@@ -11,9 +11,12 @@
       "models": [
         {
           "path": "specifications/deli/deli.cfg",
-          "runtime": "00:00:05",
+          "runtime": "00:00:01",
           "mode": "exhaustive search",
-          "result": "success"
+          "result": "success",
+          "distinctStates": 30,
+          "totalStates": 78,
+          "stateDepth": 1
         }
       ]
     }
