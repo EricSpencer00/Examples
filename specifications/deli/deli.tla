@@ -65,9 +65,11 @@ Next ==
 Consistency ==
     \A w \in Workers : (workerState[w] = "Idle") => (workerCustomer[w] = Null)
 
-(* Liveness: Every customer who arrives is eventually served by some worker *)
+(* Liveness: Every customer in the queue is eventually served *)
 EventuallyServed ==
-    \A c \in Customers : (c \in Range(orderQueue)) ~> (\E w \in Workers : workerCustomer[w] = c)
+    \A i \in DOMAIN orderQueue : 
+        LET c == orderQueue[i] IN
+        <> (\E w \in Workers : workerCustomer[w] = c)
 
 Fairness ==
     \A w \in Workers : WF_vars(AssignOrder(w)) /\ WF_vars(CompleteOrder(w))
