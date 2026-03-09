@@ -1,99 +1,83 @@
 -------------------------------- MODULE deli --------------------------------
 (***************************************************************************)
-(* A specification of a deli ordering system with a ticket-queue model.    *)
-(* Customers arrive (TakeOrder), get assigned to a worker who prepares     *)
-(* their order (PrepareOrder), then the order is served (Serve), and the   *)
-(* system returns to Idle (ReturnToIdle) to process the next customer.     *)
+(* A specification of a deli ordering system with concurrent workers.      *)
+(* Customers arrive (Arrive) and join a queue. Idle workers asynchronously *)
+(* pick up waiting customers (AssignOrder), then complete their order      *)
+(* (CompleteOrder) and return to Idle. Multiple workers process orders     *)
+(* in parallel, and customers can arrive unboundedly.                      *)
 (***************************************************************************)
 
 EXTENDS Naturals, Sequences
 
-CONSTANTS Processes, Null
+CONSTANTS Workers, Customers, Null
 
-VARIABLES ticket, worker, customer, state, orderQueue
+VARIABLES orderQueue,          \* Seq(Customers) — grows at any time
+          workerState,         \* [Workers -> {"Idle","Preparing"}]
+          workerCustomer       \* [Workers -> Customers ∪ {Null}]
 
 (***************************************************************************)
 (* State variables:                                                        *)
-(*  - ticket: increasing counter issued to arriving customers              *)
-(*  - worker: the current worker serving an order, or Null if idle         *)
-(*  - customer: the current customer being served, or Null if idle         *)
-(*  - state: the system's current phase:                                   *)
-(*          (Idle | TakingOrder | PreparingOrder | Serving)                *)
 (*  - orderQueue: sequence of customers waiting to be served               *)
+(*  - workerState: mapping from workers to their current state             *)
+(*                 (Idle or Preparing)                                     *)
+(*  - workerCustomer: mapping from workers to the customer they're         *)
+(*                    serving, or Null if idle                             *)
 (***************************************************************************)
 
+vars == <<orderQueue, workerState, workerCustomer>>
+
 TypeOK == 
-    /\ ticket \in Nat
-    /\ worker \in Processes \cup {Null}
-    /\ customer \in Processes \cup {Null}
-    /\ state \in {"Idle", "TakingOrder", "PreparingOrder", "Serving"}
-    /\ orderQueue \in Seq(Processes)
+    /\ orderQueue \in Seq(Customers)
+    /\ workerState \in [Workers -> {"Idle", "Preparing"}]
+    /\ workerCustomer \in [Workers -> Customers \cup {Null}]
 
 Init ==
-    /\ ticket = 0
-    /\ worker = Null
-    /\ customer = Null
-    /\ state = "Idle"
     /\ orderQueue = <<>>
+    /\ workerState = [w \in Workers |-> "Idle"]
+    /\ workerCustomer = [w \in Workers |-> Null]
 
-(* Customer arrives, gets a ticket number, and joins the queue *)
-TakeOrder ==
-    /\ state = "Idle"
-    /\ \E c \in Processes :
-        /\ ticket' = ticket + 1
-        /\ orderQueue' = Append(orderQueue, c)
-        /\ state' = "TakingOrder"
-        /\ UNCHANGED <<worker, customer>>
+(* Customer arrives at any time — no guard on global state *)
+Arrive(c) ==
+    /\ orderQueue' = Append(orderQueue, c)
+    /\ UNCHANGED <<workerState, workerCustomer>>
 
-(* The next customer from the queue is called and a worker is assigned *)
-PrepareOrder ==
-    /\ state = "TakingOrder"
+(* Any idle worker picks up the next waiting customer *)
+AssignOrder(w) ==
+    /\ workerState[w] = "Idle"
     /\ Len(orderQueue) > 0
-    /\ LET c == Head(orderQueue) IN
-        /\ \E w \in Processes :
-            /\ customer' = c
-            /\ worker' = w
-            /\ orderQueue' = Tail(orderQueue)
-            /\ state' = "PreparingOrder"
-        /\ UNCHANGED ticket
+    /\ workerCustomer' = [workerCustomer EXCEPT ![w] = Head(orderQueue)]
+    /\ orderQueue' = Tail(orderQueue)
+    /\ workerState' = [workerState EXCEPT ![w] = "Preparing"]
 
-(* The assigned worker serves the current customer *)
-Serve ==
-    /\ state = "PreparingOrder"
-    /\ state' = "Serving"
-    /\ UNCHANGED <<ticket, worker, customer, orderQueue>>
-
-(* Customer is served, worker and customer reset, ready for the next order *)
-ReturnToIdle ==
-    /\ state = "Serving"
-    /\ state' = "Idle"
-    /\ worker' = Null
-    /\ customer' = Null
-    /\ UNCHANGED <<ticket, orderQueue>>
+(* Worker finishes serving and becomes idle again *)
+CompleteOrder(w) ==
+    /\ workerState[w] = "Preparing"
+    /\ workerState' = [workerState EXCEPT ![w] = "Idle"]
+    /\ workerCustomer' = [workerCustomer EXCEPT ![w] = Null]
+    /\ UNCHANGED orderQueue
 
 Next ==
-    TakeOrder \/ PrepareOrder \/ Serve \/ ReturnToIdle
+    (\E c \in Customers : Arrive(c))
+    \/ (\E w \in Workers : AssignOrder(w))
+    \/ (\E w \in Workers : CompleteOrder(w))
 
-(* Safety: System stays in one of the allowed states *)
-ValidStates ==
-    state \in {"Idle", "TakingOrder", "PreparingOrder", "Serving"}
+(* Safety: Worker state is consistent with workerCustomer assignment *)
+Consistency ==
+    \A w \in Workers : (workerState[w] = "Idle") => (workerCustomer[w] = Null)
 
-(* Safety: At most one customer is being served at any given time *)
-MutualExclusion ==
-    (state = "Idle") => (customer = Null /\ worker = Null)
+(* Liveness: Every customer who arrives is eventually served by some worker *)
+EventuallyServed ==
+    \A c \in Customers : (c \in Range(orderQueue)) ~> (\E w \in Workers : workerCustomer[w] = c)
 
-(* Liveness: The system eventually returns to Idle (progress) *)
-EventuallyIdle ==
-    <> (state = "Idle")
+Fairness ==
+    \A w \in Workers : WF_vars(AssignOrder(w)) /\ WF_vars(CompleteOrder(w))
 
 Spec ==
-    Init /\ [][Next]_<<ticket, worker, customer, state, orderQueue>>
+    Init /\ [][Next]_vars /\ Fairness
 
 (* Theorems *)
 THEOREM Spec => []TypeOK
-THEOREM Spec => []ValidStates  
-THEOREM Spec => []MutualExclusion
-THEOREM Spec => EventuallyIdle
+THEOREM Spec => []Consistency
 
 =============================================================================
 
