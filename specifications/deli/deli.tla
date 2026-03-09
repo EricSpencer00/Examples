@@ -82,8 +82,8 @@ Next ==
 ValidStates ==
     state \in {"Idle", "TakingOrder", "PreparingOrder", "Serving"}
 
-(* Safety: At most one customer is being served at any given time *)
-MutualExclusion ==
+(* Safety: No customer is assigned when the system is Idle *)
+ConsistentIdle ==
     (state = "Idle") => (customer = Null /\ worker = Null)
 
 Spec ==
@@ -92,7 +92,7 @@ Spec ==
 (* Theorems *)
 THEOREM Spec => []TypeOK
 THEOREM Spec => []ValidStates  
-THEOREM Spec => []MutualExclusion
+THEOREM Spec => []ConsistentIdle
 
 =============================================================================
 
