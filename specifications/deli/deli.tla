@@ -1,4 +1,4 @@
--------------------------------- MODULE Deli --------------------------------
+-------------------------------- MODULE deli --------------------------------
 (***************************************************************************)
 (* A specification of a deli ordering system with a ticket-queue model.    *)
 (* Customers arrive (TakeOrder), get assigned to a worker who prepares     *)
