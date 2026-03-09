@@ -26,3 +26,38 @@ Init ==
     /\ state = "Idle"
     /\ orderQueue = {}
 
+TakeOrder ==
+    \E c \in Processes :
+        /\ state = "Idle"
+        /\ customer' = c
+        /\ worker' = worker
+        /\ state' = "TakingOrder"
+        /\ ticket' = ticket
+        /\ orderQueue' = orderQueue
+
+PrepareOrder ==
+    \E w \in Processes :
+        /\ state = "TakingOrder"
+        /\ worker' = w
+        /\ customer' = customer
+        /\ state' = "PreparingOrder"
+        /\ ticket' = ticket
+        /\ orderQueue' = orderQueue
+
+Serve ==
+    \E w \in Processes :
+        /\ state = "PreparingOrder"
+        /\ worker' = w
+        /\ customer' = customer
+        /\ state' = "Serving"
+        /\ ticket' = ticket
+        /\ orderQueue' = orderQueue
+
+Next ==
+    TakeOrder \/ PrepareOrder \/ Serve
+
+Spec ==
+    Init /\ [][Next]_<<ticket, worker, customer, state, orderQueue>>
+
+=============================================================================
+
