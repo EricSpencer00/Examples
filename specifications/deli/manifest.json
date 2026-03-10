@@ -14,9 +14,9 @@
           "runtime": "00:00:01",
           "mode": "exhaustive search",
           "result": "success",
-          "distinctStates": 45,
-          "totalStates": 61,
-          "stateDepth": 1
+          "distinctStates": 82,
+          "totalStates": 215,
+          "stateDepth": 13
         }
       ]
     }

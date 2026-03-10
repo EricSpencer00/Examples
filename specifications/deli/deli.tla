@@ -1,98 +1,164 @@
 -------------------------------- MODULE deli --------------------------------
 (***************************************************************************)
-(* A specification of a simple deli ordering system with a ticket queue.   *)
-(* Customers arrive, get assigned to a worker, their order is prepared,    *)
-(* and then served. The system cycles through Idle → TakingOrder →         *)
-(* PreparingOrder → Serving → ReturnToIdle to serve the next customer.     *)
+(* A specification of a deli ordering system with ticket-based queuing     *)
+(* and parallel service by multiple workers.                               *)
+(*                                                                         *)
+(* Customers arrive at any time, take the next ticket number, and join a   *)
+(* FIFO queue. Idle workers independently pick up the next waiting         *)
+(* customer, prepare their order, serve them, and return to idle.          *)
+(* Multiple workers operate concurrently, allowing several customers to    *)
+(* be served in parallel.                                                  *)
 (***************************************************************************)
 
-EXTENDS Naturals, Sequences
+EXTENDS Naturals, Sequences, FiniteSets
 
-CONSTANTS Processes, Null, MaxArrivals
+CONSTANTS Workers, MaxArrivals
 
-VARIABLES ticket, worker, customer, state, orderQueue, arrivals
+VARIABLES
+    arrivals,        \* Nat: count of customers who have arrived
+    queue,           \* Seq(Nat): FIFO queue of ticket numbers waiting
+    workerState,     \* [Workers -> {"Idle", "Preparing", "Serving"}]
+    workerCustomer,  \* [Workers -> Nat]: ticket number each worker handles (0 = none)
+    served           \* Set of ticket numbers already served
+
+vars == <<arrivals, queue, workerState, workerCustomer, served>>
 
 (***************************************************************************)
-(* State variables:                                                        *)
-(*  - ticket: increasing counter issued to arriving customers              *)
-(*  - worker: the current worker serving an order, or Null if idle         *)
-(*  - customer: the current customer being served, or Null if idle         *)
-(*  - state: the system's current phase:                                   *)
-(*          (Idle | TakingOrder | PreparingOrder | Serving)                *)
-(*  - orderQueue: sequence of customers waiting to be served               *)
+(* Helper: the set of elements in a sequence.                              *)
 (***************************************************************************)
+Range(s) == { s[i] : i \in DOMAIN s }
 
-TypeOK == 
-    /\ ticket \in Nat
-    /\ worker \in Processes \cup {Null}
-    /\ customer \in Processes \cup {Null}
-    /\ state \in {"Idle", "TakingOrder", "PreparingOrder", "Serving"}
-    /\ orderQueue \in Seq(Processes)
+---------------------------------------------------------------------------
+
+(***************)
+(* Type check  *)
+(***************)
+
+TypeOK ==
     /\ arrivals \in Nat
+    /\ queue \in Seq(1..arrivals)
+    /\ workerState \in [Workers -> {"Idle", "Preparing", "Serving"}]
+    /\ workerCustomer \in [Workers -> Nat]
+    /\ served \subseteq 1..arrivals
+
+---------------------------------------------------------------------------
+
+(*****************)
+(* Initial state *)
+(*****************)
 
 Init ==
-    /\ ticket = 0
-    /\ worker = Null
-    /\ customer = Null
-    /\ state = "Idle"
-    /\ orderQueue = <<>>
     /\ arrivals = 0
+    /\ queue = <<>>
+    /\ workerState = [w \in Workers |-> "Idle"]
+    /\ workerCustomer = [w \in Workers |-> 0]
+    /\ served = {}
 
-(* Customer arrives, gets a ticket number, and joins the queue *)
-TakeOrder ==
-    /\ state = "Idle"
-    /\ arrivals < MaxArrivals
-    /\ \E c \in Processes :
-        /\ ticket' = ticket + 1
-        /\ arrivals' = arrivals + 1
-        /\ orderQueue' = Append(orderQueue, c)
-        /\ state' = "TakingOrder"
-        /\ UNCHANGED <<worker, customer>>
+---------------------------------------------------------------------------
 
-(* The next customer from the queue is called and a worker is assigned *)
-PrepareOrder ==
-    /\ state = "TakingOrder"
-    /\ Len(orderQueue) > 0
-    /\ LET c == Head(orderQueue) IN
-        /\ \E w \in Processes :
-            /\ customer' = c
-            /\ worker' = w
-            /\ orderQueue' = Tail(orderQueue)
-            /\ state' = "PreparingOrder"
-        /\ UNCHANGED <<ticket, arrivals>>
+(***********)
+(* Actions *)
+(***********)
 
-(* The assigned worker serves the current customer *)
-Serve ==
-    /\ state = "PreparingOrder"
-    /\ state' = "Serving"
-    /\ UNCHANGED <<ticket, worker, customer, orderQueue, arrivals>>
+(* A new customer arrives, takes the next ticket, and joins the queue. *)
+(* This action has no guard and is always enabled; the arrivals count  *)
+(* is bounded only by the state constraint in the model config.        *)
+Arrive ==
+    /\ arrivals' = arrivals + 1
+    /\ queue' = Append(queue, arrivals + 1)
+    /\ UNCHANGED <<workerState, workerCustomer, served>>
 
-(* Customer is served, worker and customer reset, ready for the next order *)
-ReturnToIdle ==
-    /\ state = "Serving"
-    /\ state' = "Idle"
-    /\ worker' = Null
-    /\ customer' = Null
-    /\ UNCHANGED <<ticket, orderQueue, arrivals>>
+(* An idle worker picks up the next customer from the head of the queue *)
+AssignWorker(w) ==
+    /\ workerState[w] = "Idle"
+    /\ queue /= <<>>
+    /\ workerCustomer' = [workerCustomer EXCEPT ![w] = Head(queue)]
+    /\ workerState' = [workerState EXCEPT ![w] = "Preparing"]
+    /\ queue' = Tail(queue)
+    /\ UNCHANGED <<arrivals, served>>
+
+(* A worker finishes preparing and begins serving *)
+FinishPreparing(w) ==
+    /\ workerState[w] = "Preparing"
+    /\ workerState' = [workerState EXCEPT ![w] = "Serving"]
+    /\ UNCHANGED <<arrivals, queue, workerCustomer, served>>
+
+(* A worker completes service: customer is marked served, worker goes idle *)
+CompleteService(w) ==
+    /\ workerState[w] = "Serving"
+    /\ served' = served \cup {workerCustomer[w]}
+    /\ workerState' = [workerState EXCEPT ![w] = "Idle"]
+    /\ workerCustomer' = [workerCustomer EXCEPT ![w] = 0]
+    /\ UNCHANGED <<arrivals, queue>>
+
+---------------------------------------------------------------------------
+
+(*****************)
+(* Specification *)
+(*****************)
 
 Next ==
-    TakeOrder \/ PrepareOrder \/ Serve \/ ReturnToIdle
+    \/ Arrive
+    \/ \E w \in Workers : AssignWorker(w) \/ FinishPreparing(w) \/ CompleteService(w)
 
-(* Safety: System stays in one of the allowed states *)
-ValidStates ==
-    state \in {"Idle", "TakingOrder", "PreparingOrder", "Serving"}
+Spec == Init /\ [][Next]_vars
 
-(* Safety: No customer is assigned when the system is Idle *)
-ConsistentIdle ==
-    (state = "Idle") => (customer = Null /\ worker = Null)
+---------------------------------------------------------------------------
 
-Spec ==
-    Init /\ [][Next]_<<ticket, worker, customer, state, orderQueue, arrivals>>
+(************)
+(* Fairness *)
+(************)
 
-(* Theorems *)
+(* Under weak fairness on each worker's actions, every queued customer *)
+(* is eventually served. Without fairness, workers could idle forever. *)
+FairSpec == Spec /\ \A w \in Workers :
+    /\ WF_vars(AssignWorker(w))
+    /\ WF_vars(FinishPreparing(w))
+    /\ WF_vars(CompleteService(w))
+
+---------------------------------------------------------------------------
+
+(**************)
+(* Invariants *)
+(**************)
+
+(* An idle worker has no customer; a busy worker always has one *)
+IdleConsistency ==
+    \A w \in Workers : workerState[w] = "Idle" <=> workerCustomer[w] = 0
+
+(* No two workers handle the same customer simultaneously *)
+NoDoubleAssignment ==
+    \A w1, w2 \in Workers :
+        w1 /= w2 /\ workerCustomer[w1] /= 0
+        => workerCustomer[w1] /= workerCustomer[w2]
+
+(* Every issued ticket is in exactly one logical state:              *)
+(* queued (waiting), assigned (being prepared or served), or served. *)
+TicketStatePartition ==
+    LET assigned == { workerCustomer[w] : w \in { x \in Workers : workerCustomer[x] /= 0 } }
+        queued   == Range(queue)
+        issued   == 1..arrivals
+    IN /\ queued \cup assigned \cup served = issued
+       /\ queued \cap assigned = {}
+       /\ queued \cap served   = {}
+       /\ assigned \cap served = {}
+
+(* The queue preserves FIFO order: earlier tickets always appear first *)
+QueueOrdered ==
+    \A i, j \in DOMAIN queue : i < j => queue[i] < queue[j]
+
+---------------------------------------------------------------------------
+
+(* State constraint for bounding model checking; not part of the spec. *)
+StateConstraint == arrivals <= MaxArrivals
+
+---------------------------------------------------------------------------
+
 THEOREM Spec => []TypeOK
-THEOREM Spec => []ValidStates  
-THEOREM Spec => []ConsistentIdle
+THEOREM Spec => []IdleConsistency
+THEOREM Spec => []NoDoubleAssignment
+THEOREM Spec => []TicketStatePartition
+THEOREM Spec => []QueueOrdered
 
 =============================================================================
 
